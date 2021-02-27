@@ -6,8 +6,10 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/darkowlzz/operator-toolkit/runnable"
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -17,44 +19,57 @@ var log = ctrl.Log.WithName("grpc-server")
 
 var defaultEndpoint = "unix://tmp/csi.sock"
 
-// Server is CSI server.
+// Server is a CSI server.
 type Server struct {
 	Options
 
+	// Graceful runnable helps implement Runnable interface for starting the
+	// server with graceful shutdown.
+	// NOTE: Runnables are components that controller manager can manage.
+	*runnable.Graceful
+
+	// server is the CSI grpc server.
 	server *grpc.Server
 }
 
 // Options for the server.
 type Options struct {
+	// Endpoint is the server endpoint.
 	Endpoint string
-	IDS      csi.IdentityServer
-	CS       csi.ControllerServer
-	NS       csi.NodeServer
+	// IDS is the IdentityServer.
+	IDS csi.IdentityServer
+	// CS is the ControllerServer.
+	CS csi.ControllerServer
+	// NS is the NodeServer.
+	NS csi.NodeServer
+	// RequireLeaderElection can be set to start the server after a leader
+	// election.
+	RequireLeaderElection bool
 }
 
+// setDefaults sets the defaul options for the Server.
 func (o *Options) setDefaults() {
 	if len(o.Endpoint) == 0 {
 		o.Endpoint = defaultEndpoint
 	}
 }
 
-// NewServer creates a new server.
-func NewServer(ops Options) *Server {
+// NewServer creates a new server with graceful shutdown support.
+func NewServer(ops Options, wg *sync.WaitGroup) *Server {
 	ops.setDefaults()
 
-	return &Server{
+	s := &Server{
 		Options: ops,
 	}
+
+	// Create a graceful runnable with run and stop of the server.
+	s.Graceful = runnable.NewGraceful(s.Run, s.Stop, ops.RequireLeaderElection, wg, log)
+
+	return s
 }
 
-// NeedLeaderElection implements the LeaderElectionRunnable interface, which
-// indicates the gRPC server doesn't need leader election.
-func (*Server) NeedLeaderElection() bool {
-	return false
-}
-
-// Start starts the GRPC server.
-func (s *Server) Start(ctx context.Context) error {
+// Run starts the GRPC server. It is a blocking function.
+func (s *Server) Run(ctx context.Context) error {
 	proto, addr, err := parseEndpoint(s.Endpoint)
 	if err != nil {
 		return err
@@ -90,29 +105,17 @@ func (s *Server) Start(ctx context.Context) error {
 
 	log.Info("listening for connections", "address", listener.Addr())
 
-	// Start the GRPC server.
-	// TODO: Better error handling.
-	go func() {
-		// This is blocking.
-		if err := s.server.Serve(listener); err != nil {
-			log.Error(err, "failed to serve")
-			return
-		}
-	}()
+	// This is a blocking call.
+	return s.server.Serve(listener)
+}
 
-	go func() {
-		for {
-			<-ctx.Done()
-			// TODO: Support graceful stop.
-			// s.server.GracefulStop()
-			s.server.Stop()
-			return
-		}
-	}()
-
+// Stop stops the GRPC server gracefully.
+func (s *Server) Stop() error {
+	s.server.GracefulStop()
 	return nil
 }
 
+// parseEndpoint parses a given endpoint and returns the protocol and path.
 func parseEndpoint(ep string) (string, string, error) {
 	if strings.HasPrefix(strings.ToLower(ep), "unix://") || strings.HasPrefix(strings.ToLower(ep), "tcp://") {
 		s := strings.SplitN(ep, "://", 2)
@@ -123,6 +126,8 @@ func parseEndpoint(ep string) (string, string, error) {
 	return "", "", fmt.Errorf("Invalid endpoint: %v", ep)
 }
 
+// logGRPC handles logging of the GRPC requests. The log messages are sanitized
+// to remove any sensitive data.
 func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	if info.FullMethod == "/csi.v1.Identity/Probe" {
 		return handler(ctx, req)

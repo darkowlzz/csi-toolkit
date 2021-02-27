@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"sync"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -57,7 +58,12 @@ func main() {
 		CS:  md.GetControllerService(),
 		NS:  md.GetNodeService(),
 	}
-	s := server.NewServer(options)
+
+	// Create a WaitGroup to handle graceful shutdown of the server.
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	s := server.NewServer(options, &wg)
 
 	if err := mgr.Add(s); err != nil {
 		setupLog.Error(err, "unable to set up CSI GRPC server")
@@ -78,4 +84,6 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+
+	wg.Wait()
 }
