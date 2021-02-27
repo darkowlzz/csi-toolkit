@@ -13,6 +13,9 @@ type Identity struct {
 	ident IdentityInterface
 }
 
+// Ensure Identity implements the IdentityServer interface.
+var _ csi.IdentityServer = &Identity{}
+
 func New(ident IdentityInterface) *Identity {
 	return &Identity{
 		ident: ident,

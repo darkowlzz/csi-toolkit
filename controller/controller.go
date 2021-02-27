@@ -16,6 +16,9 @@ type Controller struct {
 	ctrlr ControllerInterface
 }
 
+// Ensure Controller implements the ControllerServer interface.
+var _ csi.ControllerServer = &Controller{}
+
 func New(ctrlr ControllerInterface) *Controller {
 	return &Controller{
 		ctrlr: ctrlr,

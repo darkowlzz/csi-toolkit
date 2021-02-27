@@ -15,6 +15,9 @@ type Node struct {
 	node NodeInterface
 }
 
+// Ensure Node implements the NodeServer interface.
+var _ csi.NodeServer = &Node{}
+
 func New(node NodeInterface) *Node {
 	return &Node{
 		node: node,
