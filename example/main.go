@@ -5,11 +5,13 @@ import (
 	"os"
 	"sync"
 
+	"google.golang.org/grpc"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/darkowlzz/csi-toolkit/example/driver"
+	"github.com/darkowlzz/csi-toolkit/interceptor"
 	"github.com/darkowlzz/csi-toolkit/server"
 )
 
@@ -57,6 +59,9 @@ func main() {
 		IDS: md.GetIdentityService(),
 		CS:  md.GetControllerService(),
 		NS:  md.GetNodeService(),
+		UnaryInterceptors: []grpc.UnaryServerInterceptor{
+			interceptor.LogGRPCWithNameAndValues("mydriver"),
+		},
 	}
 
 	// Create a WaitGroup to handle graceful shutdown of the server.

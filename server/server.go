@@ -10,9 +10,11 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/darkowlzz/operator-toolkit/runnable"
-	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 	ctrl "sigs.k8s.io/controller-runtime"
+
+	"github.com/darkowlzz/csi-toolkit/interceptor"
 )
 
 var log = ctrl.Log.WithName("grpc-server")
@@ -45,12 +47,23 @@ type Options struct {
 	// RequireLeaderElection can be set to start the server after a leader
 	// election.
 	RequireLeaderElection bool
+	// UnaryInterceptors are the interceptors to be added in the grpc server.
+	// The order of the interceptors form a chain of unary interceptors.
+	// By default a LogGRPC interceptor is used if no interceptor is provided.
+	// To use LogGRPC interceptor with other interceptors, it should be
+	// explicitly included when setting the value.
+	UnaryInterceptors []grpc.UnaryServerInterceptor
 }
 
 // setDefaults sets the defaul options for the Server.
 func (o *Options) setDefaults() {
 	if len(o.Endpoint) == 0 {
 		o.Endpoint = defaultEndpoint
+	}
+
+	// If no unary interceptor is set, add the default LogGRPC interceptor.
+	if len(o.UnaryInterceptors) == 0 {
+		o.UnaryInterceptors = append(o.UnaryInterceptors, interceptor.LogGRPC)
 	}
 }
 
@@ -87,8 +100,11 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to listen, error: %w", err)
 	}
 
+	// Chain the unary interceptors.
 	opts := []grpc.ServerOption{
-		grpc.UnaryInterceptor(logGRPC),
+		grpc.UnaryInterceptor(
+			grpc_middleware.ChainUnaryServer(s.Options.UnaryInterceptors...),
+		),
 	}
 	server := grpc.NewServer(opts...)
 	s.server = server
@@ -124,21 +140,4 @@ func parseEndpoint(ep string) (string, string, error) {
 		}
 	}
 	return "", "", fmt.Errorf("Invalid endpoint: %v", ep)
-}
-
-// logGRPC handles logging of the GRPC requests. The log messages are sanitized
-// to remove any sensitive data.
-func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	if info.FullMethod == "/csi.v1.Identity/Probe" {
-		return handler(ctx, req)
-	}
-	log.V(3).Info("GRPC call", "method", info.FullMethod)
-	log.V(5).Info("GRPC request", "request", protosanitizer.StripSecrets(req))
-	resp, err := handler(ctx, req)
-	if err != nil {
-		log.Error(err, "GRPC error")
-	} else {
-		log.V(5).Info("GRPC response", "response", protosanitizer.StripSecrets(resp))
-	}
-	return resp, err
 }
